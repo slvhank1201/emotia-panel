@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>EmotIA · Panel de uso</title>
+<style>
+  /* Tablero operativo: tiles de resumen arriba, tablas densas debajo. Oscuro primero (como la app). */
+  :root {
+    --bg: #14121b; --panel: #1c1926; --borde: #322d44; --fg: #e8e6f0;
+    --tenue: #8d89a0; --acento: #a988f5; --ok: #5fc98e; --alerta: #e0a63f; --mal: #e06767;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f5fa; --panel: #ffffff; --borde: #ddd9ea; --fg: #221f2e;
+      --tenue: #6e6a80; --acento: #6a2fe0; --ok: #1e8a52; --alerta: #a06b00; --mal: #b03535;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #f6f5fa; --panel: #ffffff; --borde: #ddd9ea; --fg: #221f2e;
+    --tenue: #6e6a80; --acento: #6a2fe0; --ok: #1e8a52; --alerta: #a06b00; --mal: #b03535;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding-block: 22px 60px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { color: var(--acento); font-size: 1.45rem; margin: 0; letter-spacing: .2px; }
+  h2 { color: var(--acento); font-size: 1rem; margin: 30px 0 10px; }
+  .estado { color: var(--tenue); font-size: .8rem; margin: 4px 0 18px; }
+  .estado b { color: var(--fg); font-weight: 600; }
+  #aviso {
+    display: none; background: var(--panel); border: 1px solid var(--mal); border-left: 4px solid var(--mal);
+    border-radius: 6px; padding: 10px 14px; margin: 0 0 16px; font-size: .85rem;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .tile { background: var(--panel); border: 1px solid var(--borde); border-radius: 8px; padding: 10px 14px; }
+  .tile .v { font-size: 1.45rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tile .k { color: var(--tenue); font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; margin-top: 2px; }
+  .tile.riesgo .v { color: var(--alerta); }
+  .marco { overflow-x: auto; background: var(--panel); border: 1px solid var(--borde); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: .82rem; font-variant-numeric: tabular-nums; }
+  th { text-align: left; color: var(--tenue); font-weight: 600; font-size: .72rem; text-transform: uppercase;
+       letter-spacing: .05em; border-bottom: 1px solid var(--borde); padding: 8px 12px; white-space: nowrap; }
+  td { border-bottom: 1px solid var(--borde); padding: 6px 12px; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .num { text-align: right; }
+  .pill { display: inline-block; border-radius: 99px; padding: 0 8px; font-size: .74rem; font-weight: 600; }
+  .pill.cero { color: var(--tenue); }
+  .pill.algo { background: rgba(224, 166, 63, .18); color: var(--alerta); }
+  .lento { color: var(--mal); font-weight: 600; }
+  .nota { color: var(--tenue); font-size: .76rem; margin-top: 26px; }
+  a { color: var(--acento); }
+</style>
+</head>
+<body>
+<main>
+  <h1>EmotIA · Panel de uso</h1>
+  <p class="estado" id="estado">Cargando datos…</p>
+  <div id="aviso"></div>
+  <section class="tiles" id="tiles"></section>
+  <h2>Sesiones (últimas 100)</h2>
+  <div class="marco"><table id="t-sesiones"></table></div>
+  <h2>Usuarios</h2>
+  <div class="marco"><table id="t-usuarios"></table></div>
+  <h2>Actividad diaria (últimos 30 días)</h2>
+  <div class="marco"><table id="t-diario"></table></div>
+  <p class="nota">Sin contenido de conversaciones; usuarios anonimizados a 8 caracteres. El costo estimado usa la
+  base medida el 31-10-2026 (2&nbsp;835 tokens ≈ S/ 0,0038 con Gemini Flash-Lite). Se actualiza solo cada 60 segundos.</p>
+</main>
+<script>
+"use strict";
+const API = "https://dxyumqurnqaqdiyxitif.supabase.co/functions/v1/panel";
+const SOLES_POR_TOKEN = 0.0038 / 2835;
+
+function clave() {
+  const m = (location.hash || "").match(/clave=([0-9a-f]+)/i);
+  return m ? m[1] : "";
+}
+const $ = (id) => document.getElementById(id);
+const esc = (v) => String(v == null ? "—" : v).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function tile(valor, etiqueta, extra) {
+  return '<div class="tile ' + (extra || "") + '"><div class="v">' + esc(valor) +
+         '</div><div class="k">' + esc(etiqueta) + "</div></div>";
+}
+function tabla(el, filas, cols) {
+  if (!filas || !filas.length) {
+    el.innerHTML = '<tr><td style="color:var(--tenue)">Sin datos.</td></tr>';
+    return;
+  }
+  const th = cols.map((c) => "<th" + (c.num ? ' class="num"' : "") + ">" + esc(c.t) + "</th>").join("");
+  const tb = filas.map((f) =>
+    "<tr>" + cols.map((c) =>
+      "<td" + (c.num ? ' class="num"' : "") + ">" + (c.f ? c.f(f) : esc(f[c.k])) + "</td>"
+    ).join("") + "</tr>"
+  ).join("");
+  el.innerHTML = "<thead><tr>" + th + "</tr></thead><tbody>" + tb + "</tbody>";
+}
+const pill = (n) => n > 0 ? '<span class="pill algo">' + n + "</span>" : '<span class="pill cero">0</span>';
+const seg = (s) => s == null ? "—" : (Number(s) > 6 ? '<span class="lento">' + esc(s) + " s</span>" : esc(s) + " s");
+
+function pintar(d) {
+  const r = d.resumen || {};
+  const costo = (Number(r.tokens_mes || 0) * SOLES_POR_TOKEN).toFixed(2);
+  const pctRespaldo = r.llamadas_30d > 0 ? Math.round(1000 * r.respaldo_30d / r.llamadas_30d) / 10 + " %" : "—";
+  $("tiles").innerHTML =
+    tile(r.usuarios_registrados, "usuarios") +
+    tile(r.activos_7d, "activos 7 días") +
+    tile(r.mensajes_hoy, "mensajes hoy") +
+    tile(r.mensajes_30d, "mensajes 30 días") +
+    tile(Number(r.tokens_mes || 0).toLocaleString("es-PE"), "tokens del mes") +
+    tile("S/ " + costo, "costo IA del mes (est.)") +
+    tile(pctRespaldo, "al modelo de respaldo (30 d)") +
+    tile(r.creditos_cobrados_30d, "créditos cobrados (30 d)") +
+    tile(r.alertas_30d, "alertas de riesgo (30 d)", r.alertas_30d > 0 ? "riesgo" : "");
+
+  tabla($("t-sesiones"), d.sesiones, [
+    { t: "usuario", k: "usuario" }, { t: "inicio", k: "inicio" }, { t: "fin", k: "fin" },
+    { t: "duración (min)", k: "duracion_min", num: true },
+    { t: "mensajes", k: "mensajes", num: true },
+    { t: "largo medio (car.)", k: "largo_medio", num: true },
+    { t: "largo máx.", k: "largo_max", num: true },
+    { t: "tokens in", k: "tokens_in", num: true }, { t: "tokens out", k: "tokens_out", num: true },
+    { t: "respuesta mediana", num: true, f: (f) => seg(f.respuesta_mediana_s) },
+    { t: "alertas", num: true, f: (f) => pill(f.alertas) },
+  ]);
+  tabla($("t-usuarios"), d.usuarios, [
+    { t: "usuario", k: "usuario" }, { t: "plan", k: "plan" },
+    { t: "créditos", k: "creditos_restantes", num: true },
+    { t: "alta", k: "alta" }, { t: "sesiones", k: "sesiones", num: true },
+    { t: "mensajes", k: "mensajes", num: true }, { t: "días activos", k: "dias_activos", num: true },
+    { t: "último uso", k: "ultimo_uso" },
+    { t: "tokens totales", num: true, f: (f) => Number(f.tokens_totales || 0).toLocaleString("es-PE") },
+    { t: "alertas", num: true, f: (f) => pill(f.alertas) },
+  ]);
+  tabla($("t-diario"), d.diario, [
+    { t: "fecha", k: "fecha" }, { t: "mensajes", k: "mensajes", num: true },
+    { t: "usuarios activos", k: "usuarios_activos", num: true },
+    { t: "tokens", num: true, f: (f) => Number(f.tokens || 0).toLocaleString("es-PE") },
+    { t: "% respaldo", num: true, f: (f) => f.pct_respaldo == null ? "—" : esc(f.pct_respaldo) + " %" },
+  ]);
+  $("estado").innerHTML = "Generado <b>" + esc(d.generado) + "</b> (hora Perú) · se actualiza solo cada 60 s";
+}
+
+async function cargar() {
+  const k = clave();
+  if (!k) {
+    $("aviso").style.display = "block";
+    $("aviso").textContent = "Falta la clave de acceso en el enlace. Pide al administrador el enlace completo (termina en #clave=…).";
+    $("estado").textContent = "Sin acceso.";
+    return;
+  }
+  try {
+    const res = await fetch(API + "?clave=" + encodeURIComponent(k), { cache: "no-store" });
+    if (!res.ok) throw new Error(res.status === 401 ? "clave no válida (401); pide el enlace vigente" : "error " + res.status);
+    pintar(await res.json());
+    $("aviso").style.display = "none";
+  } catch (e) {
+    $("aviso").style.display = "block";
+    $("aviso").textContent = "No se pudo actualizar: " + e.message + " — se reintenta en 60 s.";
+  }
+}
+cargar();
+setInterval(cargar, 60000);
+addEventListener("hashchange", cargar);
+</script>
+</body>
+</html>
