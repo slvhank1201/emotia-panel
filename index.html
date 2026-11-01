@@ -276,12 +276,20 @@ document.getElementById("chips").addEventListener("click", (ev) => {
 });
 
 // --- Consulta a la IA (solo paga tokens una pregunta NUEVA sobre datos NUEVOS) ---
-const cacheLocal = new Map();   // generado|pregunta -> respuesta, por pestaña
+const cacheLocal = new Map();   // hash(datos)|pregunta -> respuesta, por pestaña
+function hashDatos() {          // el sello `generado` cambia cada segundo: se excluye del hash
+  if (!ultimoDato) return "";
+  const { generado, ...resto } = ultimoDato;
+  const s = JSON.stringify(resto);
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return String(h);
+}
 document.getElementById("f-ia").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const pregunta = $("pregunta").value.trim();
   if (!pregunta) return;
-  const claveCache = (ultimoDato?.generado || "") + "|" + pregunta.toLowerCase().replace(/\s+/g, " ");
+  const claveCache = hashDatos() + "|" + pregunta.toLowerCase().replace(/\s+/g, " ");
   if (cacheLocal.has(claveCache)) { mostrarRespuesta(cacheLocal.get(claveCache)); return; }
   const btn = $("btn-ia");
   btn.disabled = true;
