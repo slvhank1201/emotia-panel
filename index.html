@@ -57,6 +57,17 @@
   .pill.cero { color: var(--tenue); }
   .pill.algo { background: rgba(224, 166, 63, .18); color: var(--alerta); }
   .lento { color: var(--mal); font-weight: 600; }
+  .consulta { background: var(--panel); border: 1px solid var(--borde); border-radius: 8px; padding: 12px 14px; }
+  #f-ia { display: flex; gap: 8px; flex-wrap: wrap; }
+  #pregunta { flex: 1 1 260px; min-width: 0; background: var(--bg); color: var(--fg);
+              border: 1px solid var(--borde); border-radius: 6px; padding: 8px 10px; font: inherit; }
+  #pregunta:focus { outline: 2px solid var(--acento); outline-offset: 1px; }
+  #btn-ia { background: var(--acento); color: #14121b; border: 0; border-radius: 6px;
+            padding: 8px 16px; font: inherit; font-weight: 650; cursor: pointer; }
+  #btn-ia:disabled { opacity: .55; cursor: wait; }
+  .respuesta { margin-top: 10px; padding: 10px 12px; border-left: 3px solid var(--acento);
+               background: var(--bg); border-radius: 6px; font-size: .88rem; white-space: pre-wrap; }
+  .respuesta.error { border-left-color: var(--mal); }
   .nota { color: var(--tenue); font-size: .76rem; margin-top: 26px; }
   a { color: var(--acento); }
 </style>
@@ -67,6 +78,17 @@
   <p class="estado" id="estado">Cargando datos…</p>
   <div id="aviso"></div>
   <section class="tiles" id="tiles"></section>
+
+  <h2>Pregúntale a los datos</h2>
+  <div class="consulta">
+    <form id="f-ia">
+      <input id="pregunta" type="text" maxlength="300" autocomplete="off"
+             placeholder="Ej.: ¿qué usuario consumió más tokens y cuánto nos costó?">
+      <button id="btn-ia" type="submit">Preguntar</button>
+    </form>
+    <div id="r-ia" class="respuesta" hidden></div>
+  </div>
+
   <h2>Sesiones (últimas 100)</h2>
   <div class="marco"><table id="t-sesiones"></table></div>
   <h2>Usuarios</h2>
@@ -197,6 +219,33 @@ function conectarEnVivo() {
       });
   } catch (e) { enVivo = false; }
 }
+
+// --- Consulta a la IA sobre los datos del panel ---
+document.getElementById("f-ia").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const pregunta = $("pregunta").value.trim();
+  if (!pregunta) return;
+  const btn = $("btn-ia"), r = $("r-ia");
+  btn.disabled = true;
+  r.hidden = false;
+  r.classList.remove("error");
+  r.textContent = "Analizando los datos…";
+  try {
+    const res = await fetch(API + "?clave=" + encodeURIComponent(clave()), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ pregunta }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || "error " + res.status);
+    r.textContent = d.respuesta;
+  } catch (e) {
+    r.classList.add("error");
+    r.textContent = "No se pudo responder: " + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 cargar();
 conectarEnVivo();
