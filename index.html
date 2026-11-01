@@ -74,11 +74,16 @@
   <h2>Actividad diaria (últimos 30 días)</h2>
   <div class="marco"><table id="t-diario"></table></div>
   <p class="nota">Sin contenido de conversaciones; usuarios anonimizados a 8 caracteres. El costo estimado usa la
-  base medida el 31-10-2026 (2&nbsp;835 tokens ≈ S/ 0,0038 con Gemini Flash-Lite). Se actualiza solo cada 60 segundos.</p>
+  base medida el 31-10-2026 (2&nbsp;835 tokens ≈ S/ 0,0038 con Gemini Flash-Lite). Se actualiza al instante
+  cuando hay actividad (y cada 5 minutos como respaldo).</p>
 </main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js"></script>
 <script>
 "use strict";
 const API = "https://dxyumqurnqaqdiyxitif.supabase.co/functions/v1/panel";
+const SB_URL = "https://dxyumqurnqaqdiyxitif.supabase.co";
+// Clave "anon": pública por diseño (es la misma que viaja en la app); solo permite escuchar el ping.
+const SB_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR4eXVtcXVybnFhcWRpeXhpdGlmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1NzAzMDQsImV4cCI6MjA5NzE0NjMwNH0.grKoXCu3Ai5aShq1SytX0Ao57efLmAAQ7cREFI6ZHgE";
 const SOLES_POR_TOKEN = 0.0038 / 2835;
 
 function clave() {
@@ -149,7 +154,8 @@ function pintar(d) {
     { t: "tokens", num: true, f: (f) => Number(f.tokens || 0).toLocaleString("es-PE") },
     { t: "% respaldo", num: true, f: (f) => f.pct_respaldo == null ? "—" : esc(f.pct_respaldo) + " %" },
   ]);
-  $("estado").innerHTML = "Generado <b>" + esc(d.generado) + "</b> (hora Perú) · se actualiza solo cada 60 s";
+  $("estado").innerHTML = "Generado <b>" + esc(d.generado) + "</b> (hora Perú) · " +
+    (enVivo ? "en vivo: se actualiza al detectar actividad" : "se actualiza cada 5 min (sin conexión en vivo)");
 }
 
 async function cargar() {
@@ -170,9 +176,33 @@ async function cargar() {
     $("aviso").textContent = "No se pudo actualizar: " + e.message + " — se reintenta en 60 s.";
   }
 }
+// --- Actualización en vivo: escucha el ping 'panel_cambios' de Realtime ---
+let enVivo = false;
+let ultimaCarga = 0;
+async function recargarConCalma() {          // agrupa ráfagas: máximo una recarga cada 2 s
+  const ahora = Date.now();
+  if (ahora - ultimaCarga < 2000) return;
+  ultimaCarga = ahora;
+  await cargar();
+}
+function conectarEnVivo() {
+  if (!window.supabase) return;              // si el CDN no cargó, queda el respaldo de 5 min
+  try {
+    const sb = window.supabase.createClient(SB_URL, SB_ANON);
+    sb.channel("panel_cambios", { config: { private: false } })
+      .on("broadcast", { event: "ping" }, () => { recargarConCalma(); })
+      .subscribe((estado) => {
+        enVivo = (estado === "SUBSCRIBED");
+        if (enVivo) recargarConCalma();      // al (re)conectar, ponerse al día
+      });
+  } catch (e) { enVivo = false; }
+}
+
 cargar();
-setInterval(cargar, 60000);
+conectarEnVivo();
+setInterval(cargar, 300000);                 // respaldo: cada 5 min aunque el websocket se caiga
 addEventListener("hashchange", cargar);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) recargarConCalma(); });
 </script>
 </body>
 </html>
