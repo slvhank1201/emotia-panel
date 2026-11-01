@@ -58,6 +58,10 @@
   .pill.algo { background: rgba(224, 166, 63, .18); color: var(--alerta); }
   .lento { color: var(--mal); font-weight: 600; }
   .consulta { background: var(--panel); border: 1px solid var(--borde); border-radius: 8px; padding: 12px 14px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chips button { background: var(--bg); color: var(--acento); border: 1px solid var(--borde);
+                  border-radius: 99px; padding: 4px 12px; font: inherit; font-size: .8rem; cursor: pointer; }
+  .chips button:hover { border-color: var(--acento); }
   #f-ia { display: flex; gap: 8px; flex-wrap: wrap; }
   #pregunta { flex: 1 1 260px; min-width: 0; background: var(--bg); color: var(--fg);
               border: 1px solid var(--borde); border-radius: 6px; padding: 8px 10px; font: inherit; }
@@ -81,6 +85,12 @@
 
   <h2>Pregúntale a los datos</h2>
   <div class="consulta">
+    <div class="chips" id="chips">
+      <button type="button" data-chip="consumidor">Mayor consumidor</button>
+      <button type="button" data-chip="costo">Costo del mes</button>
+      <button type="button" data-chip="pico">Día pico</button>
+      <button type="button" data-chip="salud">Salud del servicio</button>
+    </div>
     <form id="f-ia">
       <input id="pregunta" type="text" maxlength="300" autocomplete="off"
              placeholder="Ej.: ¿qué usuario consumió más tokens y cuánto nos costó?">
@@ -136,7 +146,9 @@ function tabla(el, filas, cols) {
 const pill = (n) => n > 0 ? '<span class="pill algo">' + n + "</span>" : '<span class="pill cero">0</span>';
 const seg = (s) => s == null ? "—" : (Number(s) > 6 ? '<span class="lento">' + esc(s) + " s</span>" : esc(s) + " s");
 
+let ultimoDato = null;   // último JSON recibido: con él los botones responden sin red ni IA
 function pintar(d) {
+  ultimoDato = d;
   const r = d.resumen || {};
   const costo = (Number(r.tokens_mes || 0) * SOLES_POR_TOKEN).toFixed(2);
   const pctRespaldo = r.llamadas_30d > 0 ? Math.round(1000 * r.respaldo_30d / r.llamadas_30d) / 10 + " %" : "—";
@@ -220,16 +232,60 @@ function conectarEnVivo() {
   } catch (e) { enVivo = false; }
 }
 
-// --- Consulta a la IA sobre los datos del panel ---
+// --- Botones de respuesta instantánea: aritmética local, sin red ni IA (0 tokens) ---
+const sol = (t) => "S/ " + (Number(t || 0) * SOLES_POR_TOKEN).toFixed(2);
+const CHIPS = {
+  consumidor() {
+    const u = (ultimoDato.usuarios || []).reduce((a, b) =>
+      Number(b.tokens_totales) > Number(a?.tokens_totales || 0) ? b : a, null);
+    return u ? "El mayor consumidor es " + u.usuario + ": " +
+      Number(u.tokens_totales).toLocaleString("es-PE") + " tokens acumulados (" + sol(u.tokens_totales) +
+      "), " + u.mensajes + " mensajes, último uso " + u.ultimo_uso + "." : "Sin datos de usuarios.";
+  },
+  costo() {
+    const r = ultimoDato.resumen || {};
+    return "Tokens del mes: " + Number(r.tokens_mes || 0).toLocaleString("es-PE") + " ≈ " + sol(r.tokens_mes) +
+      ". En 30 días se cobraron " + r.creditos_cobrados_30d + " créditos por " + r.mensajes_30d + " mensajes.";
+  },
+  pico() {
+    const d = (ultimoDato.diario || []).reduce((a, b) =>
+      Number(b.mensajes) > Number(a?.mensajes || 0) ? b : a, null);
+    return d ? "El día con más actividad fue " + d.fecha + ": " + d.mensajes + " mensajes de " +
+      d.usuarios_activos + " usuario(s), " + Number(d.tokens).toLocaleString("es-PE") + " tokens." : "Sin actividad en 30 días.";
+  },
+  salud() {
+    const r = ultimoDato.resumen || {};
+    const lat = (ultimoDato.sesiones || []).map((s) => Number(s.respuesta_mediana_s)).filter((x) => x > 0).sort((a, b) => a - b);
+    const med = lat.length ? lat[Math.floor(lat.length / 2)] : null;
+    const pct = r.llamadas_30d > 0 ? Math.round(1000 * r.respaldo_30d / r.llamadas_30d) / 10 : 0;
+    return "Latencia mediana por sesión: " + (med != null ? med + " s" : "—") + ". Llamadas al modelo de respaldo (30 d): " +
+      pct + " %. Alertas de riesgo (30 d): " + r.alertas_30d + ".";
+  },
+};
+function mostrarRespuesta(texto, esError) {
+  const r = $("r-ia");
+  r.hidden = false;
+  r.classList.toggle("error", !!esError);
+  r.textContent = texto;
+}
+document.getElementById("chips").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-chip]");
+  if (!b) return;
+  if (!ultimoDato) { mostrarRespuesta("Espera a que carguen los datos…", true); return; }
+  mostrarRespuesta(CHIPS[b.dataset.chip]());
+});
+
+// --- Consulta a la IA (solo paga tokens una pregunta NUEVA sobre datos NUEVOS) ---
+const cacheLocal = new Map();   // generado|pregunta -> respuesta, por pestaña
 document.getElementById("f-ia").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const pregunta = $("pregunta").value.trim();
   if (!pregunta) return;
-  const btn = $("btn-ia"), r = $("r-ia");
+  const claveCache = (ultimoDato?.generado || "") + "|" + pregunta.toLowerCase().replace(/\s+/g, " ");
+  if (cacheLocal.has(claveCache)) { mostrarRespuesta(cacheLocal.get(claveCache)); return; }
+  const btn = $("btn-ia");
   btn.disabled = true;
-  r.hidden = false;
-  r.classList.remove("error");
-  r.textContent = "Analizando los datos…";
+  mostrarRespuesta("Analizando los datos…");
   try {
     const res = await fetch(API + "?clave=" + encodeURIComponent(clave()), {
       method: "POST",
@@ -238,10 +294,10 @@ document.getElementById("f-ia").addEventListener("submit", async (ev) => {
     });
     const d = await res.json();
     if (!res.ok) throw new Error(d.error || "error " + res.status);
-    r.textContent = d.respuesta;
+    cacheLocal.set(claveCache, d.respuesta);
+    mostrarRespuesta(d.respuesta);
   } catch (e) {
-    r.classList.add("error");
-    r.textContent = "No se pudo responder: " + e.message;
+    mostrarRespuesta("No se pudo responder: " + e.message, true);
   } finally {
     btn.disabled = false;
   }
